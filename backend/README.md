@@ -97,9 +97,48 @@ Conditions de paiement,S'assurer que les delais sont conformes a la politique in
 
 ## Tests
 
+### Tests unitaires
+
 ```bash
 uv run pytest
 ```
+
+### Script de test CLI
+
+Un script de test en ligne de commande est disponible pour debuguer le traitement PDF:
+
+```bash
+# Test complet avec un PDF et CSV
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv
+
+# Test sans l'IA (extraction PDF uniquement)
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv --skip-ai
+
+# Voir tous les blocs de texte extraits
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv --show-blocks --skip-ai
+
+# Mode debug avec logs detailles
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv --debug
+
+# Dry-run (analyse sans generer le PDF)
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv --dry-run
+
+# Specifier l'URL Ollama et le modele
+uv run python scripts/test_process.py contrat.pdf scripts/exemple_clauses.csv \
+  --ollama-url http://localhost:11434 --model mistral
+```
+
+Options disponibles:
+| Option | Description |
+|--------|-------------|
+| `-o, --output` | Fichier PDF de sortie |
+| `--dry-run` | Analyser sans generer le PDF |
+| `--debug` | Activer les logs de debug |
+| `--show-blocks` | Afficher les blocs de texte extraits |
+| `--show-csv` | Afficher le contenu du CSV |
+| `--skip-ai` | Ignorer l'analyse IA |
+| `--ollama-url` | URL du service Ollama |
+| `--model` | Modele Ollama a utiliser |
 
 ## Docker
 

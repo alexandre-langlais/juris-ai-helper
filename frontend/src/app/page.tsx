@@ -43,6 +43,10 @@ export default function Home() {
     formData.append('pdf', pdfFile);
     formData.append('csv', csvFile);
 
+    // Timeout de 5 minutes
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+
     try {
       setProgress(30);
       setStatus('processing');
@@ -50,8 +54,10 @@ export default function Home() {
       const response = await fetch('/api/process', {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
       setProgress(80);
 
       if (!response.ok) {
@@ -72,10 +78,16 @@ export default function Home() {
       setProgress(100);
       setStatus('success');
     } catch (error) {
+      clearTimeout(timeoutId);
       setStatus('error');
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Une erreur est survenue'
-      );
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        setErrorMessage('Le traitement a depasse le delai maximum de 5 minutes');
+      } else {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Une erreur est survenue'
+        );
+      }
     }
   };
 
