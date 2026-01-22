@@ -44,7 +44,7 @@ affinity: {}
 backend:
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper-backend
-    tag: "8bae391734f1f24b2455584b5e05b72ce2347be1"
+    tag: "a235a1893b6fed8af953142369a6198fcdc74b29"
   replicaCount: 1
   autoscaling:
     enabled: false
@@ -87,7 +87,7 @@ frontend:
   domain: juris.rec.alexandre-langlais.fr
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper-frontend
-    tag: "8bae391734f1f24b2455584b5e05b72ce2347be1"
+    tag: "a235a1893b6fed8af953142369a6198fcdc74b29"
   replicaCount: 1
   autoscaling:
     enabled: false
