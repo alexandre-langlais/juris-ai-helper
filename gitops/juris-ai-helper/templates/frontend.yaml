@@ -40,6 +40,9 @@ spec:
           {{- end }}
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "juris-ai-helper.name" . }}-config
           ports:
             - name: http
               containerPort: {{ .Values.frontend.service.port }}
