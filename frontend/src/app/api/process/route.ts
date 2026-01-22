@@ -26,17 +26,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const blob = await response.blob();
-    const annotationsCount = response.headers.get('X-Annotations-Count') || '0';
-
-    return new NextResponse(blob, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': response.headers.get('Content-Disposition') || 'attachment',
-        'X-Annotations-Count': annotationsCount,
-      },
-    });
+    // Le backend retourne maintenant du JSON avec le PDF en base64
+    const data = await response.json();
+    return NextResponse.json(data);
   } catch (error) {
     clearTimeout(timeoutId);
 
@@ -53,10 +45,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-export const config = {
-  api: {
-    bodyParser: false,
-    responseLimit: false,
-  },
-};

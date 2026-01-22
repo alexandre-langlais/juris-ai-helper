@@ -14,6 +14,9 @@ dependencies = [
     "pydantic-settings>=2.1.0",
 ]
 
+[project.scripts]
+juris = "app.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",

@@ -1,7 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { FileText, Download, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import {
+  FileText,
+  Download,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -12,13 +20,32 @@ import {
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { FileUpload } from '@/components/file-upload';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 type ProcessingStatus = 'idle' | 'uploading' | 'processing' | 'success' | 'error';
 
+interface ChapterAnalysis {
+  chapter_title: string;
+  chapter_pages: string;
+  matched: boolean;
+  matched_subject?: string;
+  comment_added?: string;
+  explanation: string;
+}
+
 interface ProcessingResult {
-  blob: Blob;
+  pdfBase64: string;
   filename: string;
-  annotationsCount: number;
+  analyses: ChapterAnalysis[];
+  totalChapters: number;
+  matchedChapters: number;
 }
 
 export default function Home() {
@@ -29,7 +56,64 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState('');
   const [result, setResult] = useState<ProcessingResult | null>(null);
 
-  const canSubmit = pdfFile && csvFile && status === 'idle';
+  // Nouveaux états pour les options
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('');
+  const [suggestedFontSize, setSuggestedFontSize] = useState<number | null>(null);
+  const [fontSizeInput, setFontSizeInput] = useState<string>('14.0');
+  const [analyzingFonts, setAnalyzingFonts] = useState(false);
+
+  // État pour l'affichage des analyses
+  const [expandedAnalyses, setExpandedAnalyses] = useState<Set<number>>(new Set());
+
+  // Charger les modèles disponibles au démarrage
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch('/api/models');
+        if (response.ok) {
+          const data = await response.json();
+          setAvailableModels(data.models || []);
+          setSelectedModel(data.default || data.models?.[0] || '');
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des modèles:', error);
+      }
+    };
+    fetchModels();
+  }, []);
+
+  // Analyser les polices quand un PDF est uploadé
+  const handlePdfSelect = async (file: File | null) => {
+    setPdfFile(file);
+    setSuggestedFontSize(null);
+
+    if (file) {
+      setAnalyzingFonts(true);
+      try {
+        const formData = new FormData();
+        formData.append('pdf', file);
+
+        const response = await fetch('/api/analyze-fonts', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const suggested = data.suggested_title_size || 14.0;
+          setSuggestedFontSize(suggested);
+          setFontSizeInput(suggested.toString());
+        }
+      } catch (error) {
+        console.error('Erreur lors de l\'analyse des polices:', error);
+      } finally {
+        setAnalyzingFonts(false);
+      }
+    }
+  };
+
+  const canSubmit = pdfFile && csvFile && status === 'idle' && !analyzingFonts;
 
   const handleSubmit = async () => {
     if (!pdfFile || !csvFile) return;
@@ -38,10 +122,15 @@ export default function Home() {
     setProgress(10);
     setErrorMessage('');
     setResult(null);
+    setExpandedAnalyses(new Set());
 
     const formData = new FormData();
     formData.append('pdf', pdfFile);
     formData.append('csv', csvFile);
+    formData.append('min_title_font_size', fontSizeInput);
+    if (selectedModel) {
+      formData.append('model', selectedModel);
+    }
 
     // Timeout de 5 minutes
     const controller = new AbortController();
@@ -65,16 +154,18 @@ export default function Home() {
         throw new Error(errorData.detail || `Erreur ${response.status}`);
       }
 
-      const blob = await response.blob();
-      const annotationsCount = parseInt(
-        response.headers.get('X-Annotations-Count') || '0',
-        10
-      );
+      const data = await response.json();
 
       const originalName = pdfFile.name.replace(/\.pdf$/i, '');
-      const filename = `${originalName}_annote.pdf`;
+      const filename = data.pdf_filename || `${originalName}_annote.pdf`;
 
-      setResult({ blob, filename, annotationsCount });
+      setResult({
+        pdfBase64: data.pdf_base64,
+        filename,
+        analyses: data.analyses || [],
+        totalChapters: data.total_chapters || 0,
+        matchedChapters: data.matched_chapters || 0,
+      });
       setProgress(100);
       setStatus('success');
     } catch (error) {
@@ -94,7 +185,16 @@ export default function Home() {
   const handleDownload = () => {
     if (!result) return;
 
-    const url = URL.createObjectURL(result.blob);
+    // Convertir base64 en blob
+    const byteCharacters = atob(result.pdfBase64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: 'application/pdf' });
+
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = result.filename;
@@ -111,10 +211,25 @@ export default function Home() {
     setProgress(0);
     setErrorMessage('');
     setResult(null);
+    setSuggestedFontSize(null);
+    setFontSizeInput('14.0');
+    setExpandedAnalyses(new Set());
+  };
+
+  const toggleAnalysis = (index: number) => {
+    setExpandedAnalyses((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
   };
 
   return (
-    <div className="container mx-auto px-4 py-12 max-w-2xl">
+    <div className="container mx-auto px-4 py-12 max-w-3xl">
       <div className="text-center mb-8">
         <div className="flex items-center justify-center gap-3 mb-4">
           <FileText className="h-10 w-10 text-primary" />
@@ -147,8 +262,19 @@ export default function Home() {
                     label="Glissez votre PDF ici"
                     description="ou cliquez pour parcourir"
                     file={pdfFile}
-                    onFileSelect={setPdfFile}
+                    onFileSelect={handlePdfSelect}
                   />
+                  {analyzingFonts && (
+                    <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Analyse des polices en cours...
+                    </div>
+                  )}
+                  {suggestedFontSize !== null && !analyzingFonts && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Taille de police suggérée pour les titres: {suggestedFontSize}
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -162,6 +288,42 @@ export default function Home() {
                     file={csvFile}
                     onFileSelect={setCsvFile}
                   />
+                </div>
+
+                {/* Options avancées */}
+                <div className="grid grid-cols-2 gap-4 pt-4 border-t">
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">
+                      Taille de police min. des titres
+                    </label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min="6"
+                      max="72"
+                      value={fontSizeInput}
+                      onChange={(e) => setFontSizeInput(e.target.value)}
+                      placeholder="14.0"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-2 block">
+                      Modèle LLM
+                    </label>
+                    <Select value={selectedModel} onValueChange={setSelectedModel}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Sélectionner un modèle" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableModels.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               </div>
 
@@ -197,16 +359,83 @@ export default function Home() {
 
           {/* Success State */}
           {status === 'success' && result && (
-            <div className="space-y-4 py-4">
+            <div className="space-y-6 py-4">
               <div className="flex items-center justify-center gap-2 text-green-600">
                 <CheckCircle2 className="h-6 w-6" />
                 <span className="text-lg font-medium">Traitement termine</span>
               </div>
               <p className="text-center text-muted-foreground">
-                {result.annotationsCount} annotation
-                {result.annotationsCount !== 1 ? 's' : ''} ajoutee
-                {result.annotationsCount !== 1 ? 's' : ''} au document
+                {result.matchedChapters} correspondance
+                {result.matchedChapters !== 1 ? 's' : ''} trouvee
+                {result.matchedChapters !== 1 ? 's' : ''} sur {result.totalChapters} chapitre
+                {result.totalChapters !== 1 ? 's' : ''}
               </p>
+
+              {/* Analyses détaillées */}
+              {result.analyses.length > 0 && (
+                <div className="border rounded-lg">
+                  <div className="p-3 bg-muted/50 border-b font-medium">
+                    Analyses detaillees par chapitre
+                  </div>
+                  <div className="divide-y">
+                    {result.analyses.map((analysis, index) => (
+                      <div key={index} className="p-3">
+                        <button
+                          onClick={() => toggleAnalysis(index)}
+                          className="w-full flex items-center justify-between text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`px-2 py-0.5 text-xs rounded ${
+                                analysis.matched
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-gray-100 text-gray-600'
+                              }`}
+                            >
+                              {analysis.matched ? 'MATCH' : '—'}
+                            </span>
+                            <span className="font-medium">
+                              {analysis.chapter_title}
+                            </span>
+                            <span className="text-sm text-muted-foreground">
+                              (p. {analysis.chapter_pages})
+                            </span>
+                          </div>
+                          {expandedAnalyses.has(index) ? (
+                            <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </button>
+
+                        {expandedAnalyses.has(index) && (
+                          <div className="mt-3 pl-4 space-y-2 text-sm">
+                            {analysis.matched && analysis.matched_subject && (
+                              <p>
+                                <span className="font-medium">Sujet matché:</span>{' '}
+                                {analysis.matched_subject}
+                              </p>
+                            )}
+                            {analysis.matched && analysis.comment_added && (
+                              <p>
+                                <span className="font-medium">Commentaire ajouté:</span>{' '}
+                                {analysis.comment_added}
+                              </p>
+                            )}
+                            <div>
+                              <span className="font-medium">Explication du LLM:</span>
+                              <p className="mt-1 text-muted-foreground whitespace-pre-wrap">
+                                {analysis.explanation}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="flex gap-3">
                 <Button onClick={handleDownload} className="flex-1" size="lg">
                   <Download className="mr-2 h-4 w-4" />

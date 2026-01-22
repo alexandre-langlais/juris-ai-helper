@@ -2,22 +2,32 @@ import json
 import httpx
 
 from app.config import settings
-from app.schemas.models import TextBlock, CSVEntry, AnnotationMatch
+from app.schemas.models import CSVEntry, Chapter, ChapterAnalysis
 from app.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 
 SYSTEM_PROMPT = """Tu es un assistant juridique spécialisé dans l'analyse de contrats.
-Ta tâche est de déterminer si un bloc de texte d'un contrat correspond à l'un des sujets fournis.
+Ta tâche est d'analyser un chapitre complet d'un contrat et de déterminer s'il correspond à l'un des sujets fournis.
+
+Un chapitre comprend un titre et son contenu textuel complet.
 
 RÈGLES STRICTES:
 1. Réponds UNIQUEMENT avec un JSON valide.
-2. Si le texte correspond à un sujet, réponds: {"match": true, "sujet_index": <index du sujet>}
-3. Si le texte ne correspond à aucun sujet, réponds: {"match": false, "sujet_index": null}
-4. Le sujet_index est l'index (0-based) du sujet dans la liste fournie.
-5. Ne fais correspondre que si le texte traite CLAIREMENT et DIRECTEMENT du sujet.
-6. En cas de doute, réponds {"match": false, "sujet_index": null}."""
+2. Le JSON doit contenir les champs suivants:
+   - "match": true si le chapitre correspond à un sujet, false sinon
+   - "sujet_index": l'index (0-based) du sujet correspondant, ou null si pas de correspondance
+   - "explanation": une explication détaillée en français de ta décision (2-3 phrases)
+
+3. Format de réponse:
+   Si correspondance: {"match": true, "sujet_index": <index>, "explanation": "<explication>"}
+   Si pas de correspondance: {"match": false, "sujet_index": null, "explanation": "<explication>"}
+
+4. Analyse le titre ET le contenu pour déterminer la correspondance.
+5. Ne fais correspondre que si le chapitre traite CLAIREMENT et DIRECTEMENT du sujet.
+6. En cas de doute, réponds avec match: false.
+7. L'explication doit justifier clairement pourquoi tu as fait ce choix."""
 
 
 async def check_ollama_health() -> bool:
@@ -41,19 +51,21 @@ async def check_ollama_health() -> bool:
         return False
 
 
-async def analyze_text_block(
-    text_block: TextBlock, csv_entries: list[CSVEntry]
-) -> AnnotationMatch | None:
+async def analyze_chapter(
+    chapter: Chapter, csv_entries: list[CSVEntry], model: str | None = None
+) -> ChapterAnalysis:
     """
-    Analyse un bloc de texte pour trouver une correspondance avec les sujets CSV.
+    Analyse un chapitre pour trouver une correspondance avec les sujets CSV.
 
     Args:
-        text_block: Bloc de texte à analyser
+        chapter: Chapitre à analyser (titre + contenu)
         csv_entries: Liste des entrées CSV (sujets/commentaires)
+        model: Modèle LLM à utiliser (utilise le modèle par défaut si None)
 
     Returns:
-        AnnotationMatch si une correspondance est trouvée, None sinon
+        ChapterAnalysis avec le résultat de l'analyse et l'explication
     """
+    effective_model = model or settings.ollama_model
     # Construction de la liste des sujets pour le prompt
     sujets_list = "\n".join(
         [f"{i}. {entry.sujet}" for i, entry in enumerate(csv_entries)]
@@ -62,12 +74,17 @@ async def analyze_text_block(
     user_prompt = f"""SUJETS À RECHERCHER:
 {sujets_list}
 
-TEXTE DU CONTRAT À ANALYSER:
+CHAPITRE DU CONTRAT À ANALYSER:
+
+TITRE: {chapter.title}
+
+CONTENU:
 \"\"\"
-{text_block.text}
+{chapter.content}
 \"\"\"
 
-Analyse ce texte et détermine s'il correspond à l'un des sujets ci-dessus.
+Analyse ce chapitre complet (titre + contenu) et détermine s'il correspond à l'un des sujets ci-dessus.
+Fournis une explication détaillée de ta décision.
 Réponds uniquement avec le JSON demandé."""
 
     try:
@@ -77,7 +94,7 @@ Réponds uniquement avec le JSON demandé."""
             response = await client.post(
                 f"{settings.ollama_base_url}/api/generate",
                 json={
-                    "model": settings.ollama_model,
+                    "model": effective_model,
                     "prompt": user_prompt,
                     "system": SYSTEM_PROMPT,
                     "stream": False,
@@ -87,67 +104,107 @@ Réponds uniquement avec le JSON demandé."""
 
             if response.status_code != 200:
                 logger.warning(f"Ollama a repondu avec le code {response.status_code}")
-                return None
+                return ChapterAnalysis(
+                    chapter=chapter,
+                    matched=False,
+                    csv_entry=None,
+                    explanation=f"Erreur: Ollama a répondu avec le code {response.status_code}",
+                )
 
             result = response.json()
             ai_response = result.get("response", "")
-            logger.debug(f"Reponse IA: {ai_response[:100]}...")
+            logger.debug(f"Reponse IA: {ai_response[:200]}...")
 
             # Parse de la réponse JSON de l'IA
             try:
                 parsed = json.loads(ai_response)
+                explanation = parsed.get("explanation", "Aucune explication fournie par le LLM.")
+
                 if parsed.get("match") and parsed.get("sujet_index") is not None:
                     sujet_index = int(parsed["sujet_index"])
                     if 0 <= sujet_index < len(csv_entries):
-                        matched_sujet = csv_entries[sujet_index].sujet
-                        logger.info(f"Match trouve: '{matched_sujet}' pour le bloc page {text_block.page_number}")
-                        return AnnotationMatch(
-                            text_block=text_block,
-                            csv_entry=csv_entries[sujet_index],
-                            confidence=1.0,
+                        matched_entry = csv_entries[sujet_index]
+                        logger.info(f"Match trouve: '{matched_entry.sujet}' pour le chapitre '{chapter.title}'")
+                        return ChapterAnalysis(
+                            chapter=chapter,
+                            matched=True,
+                            csv_entry=matched_entry,
+                            explanation=explanation,
                         )
+                    else:
+                        logger.warning(f"Index de sujet invalide: {sujet_index}")
+                        return ChapterAnalysis(
+                            chapter=chapter,
+                            matched=False,
+                            csv_entry=None,
+                            explanation=f"Erreur: index de sujet invalide ({sujet_index}). {explanation}",
+                        )
+
+                # Pas de correspondance
+                logger.debug(f"Pas de match pour le chapitre '{chapter.title}'")
+                return ChapterAnalysis(
+                    chapter=chapter,
+                    matched=False,
+                    csv_entry=None,
+                    explanation=explanation,
+                )
+
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.warning(f"Erreur parsing reponse IA: {e}")
-                return None
+                return ChapterAnalysis(
+                    chapter=chapter,
+                    matched=False,
+                    csv_entry=None,
+                    explanation=f"Erreur lors du parsing de la réponse IA: {e}",
+                )
 
     except httpx.TimeoutException:
         logger.warning(f"Timeout Ollama apres {settings.ollama_timeout}s")
-        return None
+        return ChapterAnalysis(
+            chapter=chapter,
+            matched=False,
+            csv_entry=None,
+            explanation=f"Timeout: le LLM n'a pas répondu dans les {settings.ollama_timeout} secondes.",
+        )
     except Exception as e:
         logger.error(f"Erreur lors de l'appel Ollama: {e}")
-        return None
+        return ChapterAnalysis(
+            chapter=chapter,
+            matched=False,
+            csv_entry=None,
+            explanation=f"Erreur lors de l'appel au LLM: {e}",
+        )
 
-    return None
 
-
-async def analyze_all_blocks(
-    text_blocks: list[TextBlock], csv_entries: list[CSVEntry]
-) -> list[AnnotationMatch]:
+async def analyze_all_chapters(
+    chapters: list[Chapter], csv_entries: list[CSVEntry], model: str | None = None
+) -> list[ChapterAnalysis]:
     """
-    Analyse tous les blocs de texte pour trouver les correspondances.
+    Analyse tous les chapitres et retourne les résultats avec explications.
 
     Args:
-        text_blocks: Liste des blocs de texte extraits du PDF
+        chapters: Liste des chapitres extraits du PDF
         csv_entries: Liste des entrées CSV
+        model: Modèle LLM à utiliser (utilise le modèle par défaut si None)
 
     Returns:
-        Liste des matches trouvés
+        Liste des analyses pour chaque chapitre
     """
-    matches: list[AnnotationMatch] = []
-    blocks_to_analyze = [b for b in text_blocks if len(b.text) >= 20]
-    total_blocks = len(blocks_to_analyze)
+    analyses: list[ChapterAnalysis] = []
+    total_chapters = len(chapters)
 
-    logger.info(f"Analyse de {total_blocks} blocs de texte (ignores: {len(text_blocks) - total_blocks} blocs trop courts)")
+    logger.info(f"Analyse de {total_chapters} chapitres")
 
-    for i, block in enumerate(blocks_to_analyze, 1):
-        logger.debug(f"Analyse bloc {i}/{total_blocks} (page {block.page_number})")
-        match = await analyze_text_block(block, csv_entries)
-        if match:
-            matches.append(match)
+    for i, chapter in enumerate(chapters, 1):
+        logger.debug(f"Analyse chapitre {i}/{total_chapters}: '{chapter.title}'")
+        analysis = await analyze_chapter(chapter, csv_entries, model)
+        analyses.append(analysis)
 
-        # Log de progression tous les 10 blocs
-        if i % 10 == 0:
-            logger.info(f"Progression: {i}/{total_blocks} blocs analyses, {len(matches)} matches trouves")
+        # Log de progression tous les 5 chapitres
+        if i % 5 == 0:
+            matched_count = sum(1 for a in analyses if a.matched)
+            logger.info(f"Progression: {i}/{total_chapters} chapitres analyses, {matched_count} matches trouves")
 
-    logger.info(f"Analyse terminee: {len(matches)} correspondances sur {total_blocks} blocs")
-    return matches
+    matched_count = sum(1 for a in analyses if a.matched)
+    logger.info(f"Analyse terminee: {matched_count} correspondances sur {total_chapters} chapitres")
+    return analyses

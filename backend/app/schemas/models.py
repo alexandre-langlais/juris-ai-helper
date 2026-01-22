@@ -8,35 +8,41 @@ class CSVEntry(BaseModel):
     commentaire: str = Field(..., description="Le commentaire à annoter")
 
 
-class TextBlock(BaseModel):
-    """Un bloc de texte extrait du PDF avec ses coordonnées."""
+class Chapter(BaseModel):
+    """Un chapitre extrait du PDF avec son titre et son contenu."""
 
-    text: str = Field(..., description="Contenu textuel du bloc")
-    page_number: int = Field(..., description="Numéro de la page (0-indexed)")
-    x0: float = Field(..., description="Coordonnée X gauche")
-    y0: float = Field(..., description="Coordonnée Y haut")
-    x1: float = Field(..., description="Coordonnée X droite")
-    y1: float = Field(..., description="Coordonnée Y bas")
+    title: str = Field(..., description="Titre du chapitre")
+    content: str = Field(..., description="Contenu textuel complet du chapitre")
+    start_page: int = Field(..., description="Page de début du chapitre (0-indexed)")
+    end_page: int = Field(..., description="Page de fin du chapitre (0-indexed)")
+    title_x0: float = Field(..., description="Coordonnée X gauche du titre")
+    title_y0: float = Field(..., description="Coordonnée Y haut du titre")
+    title_x1: float = Field(..., description="Coordonnée X droite du titre")
+    title_y1: float = Field(..., description="Coordonnée Y bas du titre")
+    title_font_size: float = Field(..., description="Taille de police du titre")
 
 
-class AnnotationMatch(BaseModel):
-    """Un match entre un bloc de texte et un sujet du CSV."""
+class ChapterAnalysis(BaseModel):
+    """Résultat de l'analyse d'un chapitre par le LLM."""
 
-    text_block: TextBlock
-    csv_entry: CSVEntry
-    confidence: float = Field(
-        default=1.0, ge=0.0, le=1.0, description="Score de confiance du match"
+    chapter: Chapter
+    matched: bool = Field(..., description="True si le chapitre correspond à un sujet")
+    csv_entry: CSVEntry | None = Field(
+        default=None, description="L'entrée CSV correspondante si matched=True"
+    )
+    explanation: str = Field(
+        ..., description="Explication du LLM justifiant sa décision"
     )
 
 
-class ProcessingStatus(BaseModel):
-    """Statut du traitement."""
+class ProcessingResult(BaseModel):
+    """Résultat complet du traitement d'un PDF."""
 
-    status: str = Field(..., description="État du traitement")
-    message: str = Field(default="", description="Message descriptif")
-    annotations_count: int = Field(
-        default=0, description="Nombre d'annotations ajoutées"
+    analyses: list[ChapterAnalysis] = Field(
+        ..., description="Liste des analyses pour chaque chapitre"
     )
+    total_chapters: int = Field(..., description="Nombre total de chapitres analysés")
+    matched_chapters: int = Field(..., description="Nombre de chapitres avec correspondance")
 
 
 class HealthResponse(BaseModel):
