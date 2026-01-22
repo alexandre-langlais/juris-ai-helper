@@ -41,11 +41,10 @@ securityContext: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
-
 backend:
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper-backend
-    tag: "a235a1893b6fed8af953142369a6198fcdc74b29"
+    tag: "db0e42cf013fab7cd37c360d45aa6194c467e2e8"
   replicaCount: 1
   autoscaling:
     enabled: false
@@ -87,21 +86,17 @@ backend:
   debug: true
   ollamaBaseUrl: http://ollama.ollama-rec.svc.cluster.local:11434
   ollamaTimeout: 120
-
   # Limites de fichiers (en Mo)
   maxPdfSizeMb: 50
   maxCsvSizeMb: 5
-
   # Modèles
   ollamaModel: llama3.2:3b
   ollamaAvailableModels: llama3.2:3b,qwen2.5:3b
-
-
 frontend:
   domain: juris.rec.alexandre-langlais.fr
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper-frontend
-    tag: "a235a1893b6fed8af953142369a6198fcdc74b29"
+    tag: "db0e42cf013fab7cd37c360d45aa6194c467e2e8"
   replicaCount: 1
   autoscaling:
     enabled: false
