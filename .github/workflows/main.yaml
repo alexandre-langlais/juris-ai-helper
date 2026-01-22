@@ -1,0 +1,57 @@
+name: Build and Push to GHCR
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME_BACK: ${{ github.repository }}-backend
+  IMAGE_NAME_FRONT: ${{ github.repository }}-frontend
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build & Push Backend
+      - name: Build and push Backend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend # Chemin vers votre dossier FastAPI
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_BACK }}:${{ github.sha }}
+
+      # Build & Push Frontend
+      - name: Build and push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend # Chemin vers votre dossier NextJS
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONT }}:${{ github.sha }}
+
+      # Mise à jour du Repo ArgoCD (GitOps)
+      - name: Update ArgoCD Manifests
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          yq -i '.backend.image.tag = "${{ github.sha }}"' gitops/juris-ai-helper/values.yaml
+          yq -i '.frontend.image.tag = "${{ github.sha }}"' gitops/juris-ai-helper/values.yaml
+
+          git add gitops/juris-ai-helper/values.yaml
+          git commit -m "chore: update images to ${{ github.sha }}"
+          git push
