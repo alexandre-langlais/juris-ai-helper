@@ -15,11 +15,6 @@ class Chapter(BaseModel):
     content: str = Field(..., description="Contenu textuel complet du chapitre")
     start_page: int = Field(..., description="Page de début du chapitre (0-indexed)")
     end_page: int = Field(..., description="Page de fin du chapitre (0-indexed)")
-    title_x0: float = Field(..., description="Coordonnée X gauche du titre")
-    title_y0: float = Field(..., description="Coordonnée Y haut du titre")
-    title_x1: float = Field(..., description="Coordonnée X droite du titre")
-    title_y1: float = Field(..., description="Coordonnée Y bas du titre")
-    title_font_size: float = Field(..., description="Taille de police du titre")
 
 
 class ChapterAnalysis(BaseModel):

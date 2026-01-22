@@ -17,10 +17,6 @@ const nextConfig = {
         destination: `${backendUrl}/api/preview`,
       },
       {
-        source: '/api/analyze-fonts',
-        destination: `${backendUrl}/api/analyze-fonts`,
-      },
-      {
         source: '/api/models',
         destination: `${backendUrl}/api/models`,
       },

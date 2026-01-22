@@ -1,15 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// On utilise la même logique d'URL que pour le process
+const BACKEND_URL = process.env.API_URL || 'http://localhost:8000';
 const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+
 export async function POST(request: NextRequest) {
+  console.log("Debug runtime - API_URL:", BACKEND_URL);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
   try {
     const formData = await request.formData();
-
+    console.log("Tentative d'appel vers:", `${BACKEND_URL}/api/process`);
     const response = await fetch(`${BACKEND_URL}/api/process`, {
       method: 'POST',
       body: formData,

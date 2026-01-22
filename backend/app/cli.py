@@ -4,8 +4,7 @@ JurisAnnotate CLI - Outil en ligne de commande pour l'annotation de contrats PDF
 
 Usage:
     juris process <pdf> <csv> [options]
-    juris analyze-fonts <pdf>
-    juris preview <pdf> [options]
+    juris preview <pdf>
 """
 
 import argparse
@@ -20,7 +19,7 @@ from app.services.pdf_service import (
     extract_chapters,
     add_annotations_to_pdf,
     get_pdf_info,
-    analyze_font_sizes,
+    get_toc_preview,
 )
 from app.services.csv_service import parse_csv
 from app.services.ollama_service import (
@@ -53,7 +52,6 @@ def create_parser() -> argparse.ArgumentParser:
 Exemples:
   juris process contrat.pdf clauses.csv
   juris process contrat.pdf clauses.csv --output resultat.pdf
-  juris process contrat.pdf clauses.csv --min-font-size 14
   juris process contrat.pdf clauses.csv --dry-run --debug
         """,
     )
@@ -63,12 +61,6 @@ Exemples:
         "-o", "--output",
         type=Path,
         help="Fichier PDF de sortie (defaut: <pdf>_annote.pdf)",
-    )
-    process_parser.add_argument(
-        "--min-font-size",
-        type=float,
-        default=None,
-        help=f"Taille de police min. pour les titres de chapitres (defaut: {settings.default_min_title_font_size})",
     )
     process_parser.add_argument(
         "--dry-run",
@@ -106,39 +98,16 @@ Exemples:
         help=f"Modele Ollama (defaut: {settings.ollama_model})",
     )
 
-    # Sous-commande: analyze-fonts
-    fonts_parser = subparsers.add_parser(
-        "analyze-fonts",
-        help="Analyser les tailles de police d'un PDF",
-        epilog="""
-Exemple:
-  juris analyze-fonts contrat.pdf
-        """,
-    )
-    fonts_parser.add_argument("pdf", type=Path, help="Fichier PDF a analyser")
-    fonts_parser.add_argument(
-        "--detailed",
-        action="store_true",
-        help="Afficher les exemples de texte pour chaque taille",
-    )
-
     # Sous-commande: preview
     preview_parser = subparsers.add_parser(
         "preview",
-        help="Previsualiser les chapitres d'un PDF",
+        help="Previsualiser les chapitres d'un PDF (via table des matieres)",
         epilog="""
-Exemples:
+Exemple:
   juris preview contrat.pdf
-  juris preview contrat.pdf --min-font-size 14
         """,
     )
     preview_parser.add_argument("pdf", type=Path, help="Fichier PDF a analyser")
-    preview_parser.add_argument(
-        "--min-font-size",
-        type=float,
-        default=None,
-        help=f"Taille de police min. pour les titres (defaut: {settings.default_min_title_font_size})",
-    )
 
     return parser
 
@@ -162,14 +131,11 @@ async def cmd_process(args) -> int:
     if args.model:
         settings.ollama_model = args.model
 
-    min_font_size = args.min_font_size or settings.default_min_title_font_size
-
     print("=" * 70)
     print("JurisAnnotate - Traitement PDF")
     print("=" * 70)
     print(f"\nFichier PDF: {args.pdf}")
     print(f"Fichier CSV: {args.csv}")
-    print(f"Taille police titres: >= {min_font_size}")
     print(f"Ollama: {settings.ollama_base_url} ({settings.ollama_model})")
 
     # Lecture des fichiers
@@ -201,25 +167,25 @@ async def cmd_process(args) -> int:
         print(f"  ERREUR: {e}")
         return 1
 
-    # Extraction des chapitres
+    # Extraction des chapitres via table des matieres
     print("\n" + "-" * 50)
-    print("ETAPE 3: Extraction des chapitres")
+    print("ETAPE 3: Extraction des chapitres (via table des matieres)")
     print("-" * 50)
 
     try:
-        chapters = extract_chapters(pdf_bytes, min_title_font_size=min_font_size)
+        chapters = extract_chapters(pdf_bytes)
         print(f"  Chapitres extraits: {len(chapters)}")
 
         if not chapters:
-            print(f"\n  ATTENTION: Aucun chapitre detecte avec une police >= {min_font_size}")
-            print("  Utilisez 'juris analyze-fonts' pour voir les tailles de police du document.")
+            print("\n  ATTENTION: Aucun chapitre detecte.")
+            print("  Assurez-vous que le PDF contient une table des matieres.")
+            print("  Utilisez 'juris preview' pour verifier la detection.")
             return 1
 
         if args.show_chapters:
             print("\n  --- CHAPITRES ---")
             for i, chapter in enumerate(chapters):
                 print(f"\n  [{i + 1}] '{chapter.title}'")
-                print(f"      Police: {chapter.title_font_size} pt")
                 print(f"      Pages: {chapter.start_page + 1}-{chapter.end_page + 1}")
                 content_preview = chapter.content[:150].replace("\n", " ")
                 print(f"      Contenu: {content_preview}...")
@@ -372,73 +338,28 @@ async def cmd_process(args) -> int:
     return 0
 
 
-async def cmd_analyze_fonts(args) -> int:
-    """Execute la commande analyze-fonts."""
-    if not args.pdf.exists():
-        print(f"ERREUR: Fichier PDF introuvable: {args.pdf}")
-        return 1
-
-    print("=" * 70)
-    print("JurisAnnotate - Analyse des tailles de police")
-    print("=" * 70)
-    print(f"\nFichier: {args.pdf}")
-
-    pdf_bytes = args.pdf.read_bytes()
-
-    try:
-        analysis = analyze_font_sizes(pdf_bytes)
-    except Exception as e:
-        print(f"ERREUR: {e}")
-        return 1
-
-    print(f"\nTaille minimale: {analysis['min_size']}")
-    print(f"Taille maximale: {analysis['max_size']}")
-    print(f"Taille suggeree pour titres: {analysis['suggested_title_size']}")
-
-    print("\n" + "-" * 50)
-    print("TAILLES DE POLICE")
-    print("-" * 50)
-
-    for size, data in sorted(analysis["font_sizes"].items()):
-        print(f"\n  {size} pt ({data['count']} occurrences)")
-        if args.detailed and data["examples"]:
-            for example in data["examples"]:
-                print(f"    - {example}")
-
-    print("\n" + "-" * 50)
-    print("CONSEIL")
-    print("-" * 50)
-    print(f"  Pour traiter ce document, essayez:")
-    print(f"  juris process fichier.pdf fichier.csv --min-font-size {analysis['suggested_title_size']}")
-
-    return 0
-
-
 async def cmd_preview(args) -> int:
     """Execute la commande preview."""
     if not args.pdf.exists():
         print(f"ERREUR: Fichier PDF introuvable: {args.pdf}")
         return 1
 
-    min_font_size = args.min_font_size or settings.default_min_title_font_size
-
     print("=" * 70)
-    print("JurisAnnotate - Apercu des chapitres")
+    print("JurisAnnotate - Apercu des chapitres (table des matieres)")
     print("=" * 70)
     print(f"\nFichier: {args.pdf}")
-    print(f"Taille police min.: {min_font_size}")
 
     pdf_bytes = args.pdf.read_bytes()
 
     try:
         pdf_info = get_pdf_info(pdf_bytes)
-        chapters = extract_chapters(pdf_bytes, min_title_font_size=min_font_size)
+        toc_entries = get_toc_preview(pdf_bytes)
     except Exception as e:
         print(f"ERREUR: {e}")
         return 1
 
     print(f"\nNombre de pages: {pdf_info['page_count']}")
-    print(f"Chapitres detectes: {len(chapters)}")
+    print(f"Chapitres detectes: {len(toc_entries)}")
 
     if pdf_info.get("metadata"):
         meta = pdf_info["metadata"]
@@ -448,19 +369,17 @@ async def cmd_preview(args) -> int:
             print(f"Auteur: {meta['author']}")
 
     print("\n" + "-" * 50)
-    print("CHAPITRES")
+    print("TABLE DES MATIERES DETECTEE")
     print("-" * 50)
 
-    if not chapters:
-        print(f"\n  Aucun chapitre detecte avec une police >= {min_font_size}")
-        print("  Utilisez 'juris analyze-fonts' pour voir les tailles disponibles.")
+    if not toc_entries:
+        print("\n  Aucune table des matieres detectee.")
+        print("  Assurez-vous que le document contient un sommaire avec les titres")
+        print("  de chapitres et leurs numeros de page.")
     else:
-        for i, chapter in enumerate(chapters):
-            print(f"\n  {i + 1}. {chapter.title}")
-            print(f"     Police: {chapter.title_font_size} pt")
-            print(f"     Pages: {chapter.start_page + 1}-{chapter.end_page + 1}")
-            content_preview = chapter.content[:200].replace("\n", " ")
-            print(f"     Apercu: {content_preview}...")
+        for i, entry in enumerate(toc_entries):
+            print(f"\n  {i + 1}. {entry['title']}")
+            print(f"     Page: {entry['page']}")
 
     return 0
 
@@ -483,8 +402,6 @@ async def async_main() -> int:
     # Dispatch des commandes
     if args.command == "process":
         return await cmd_process(args)
-    elif args.command == "analyze-fonts":
-        return await cmd_analyze_fonts(args)
     elif args.command == "preview":
         return await cmd_preview(args)
     else:

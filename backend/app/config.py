@@ -18,9 +18,6 @@ class Settings(BaseSettings):
     max_pdf_size_mb: int = 50
     max_csv_size_mb: int = 5
 
-    # Configuration extraction de chapitres
-    default_min_title_font_size: float = 14.0
-
     class Config:
         env_prefix = "JURIS_"
         env_file = ".env"

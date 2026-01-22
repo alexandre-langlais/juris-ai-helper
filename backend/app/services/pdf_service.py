@@ -1,119 +1,186 @@
 import io
+import re
 
 import fitz  # PyMuPDF
 
 from app.schemas.models import Chapter, ChapterAnalysis
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
-def extract_chapters(pdf_bytes: bytes, min_title_font_size: float = 14.0) -> list[Chapter]:
+def extract_toc_from_bookmarks(doc: fitz.Document) -> list[tuple[str, int]]:
     """
-    Extrait les chapitres d'un PDF en détectant les titres par leur taille de police.
+    Extrait la table des matières depuis les signets/bookmarks du PDF.
 
-    Un chapitre commence par un titre (texte avec une police >= min_title_font_size)
-    et contient tout le texte jusqu'au prochain titre de chapitre.
+    Args:
+        doc: Document PyMuPDF ouvert
+
+    Returns:
+        Liste de tuples (titre, page) ou liste vide si pas de signets
+    """
+    toc = doc.get_toc()
+    if not toc:
+        return []
+
+    # Le TOC de PyMuPDF retourne [level, title, page]
+    # On ne garde que le titre et la page (0-indexed)
+    entries = []
+    for entry in toc:
+        level, title, page = entry[0], entry[1], entry[2]
+        # On prend tous les niveaux de titres
+        if page > 0:  # Page valide
+            entries.append((title.strip(), page - 1))  # Convertir en 0-indexed
+
+    logger.info(f"TOC extrait depuis les signets: {len(entries)} entrees")
+    return entries
+
+
+def extract_toc_from_text(doc: fitz.Document, max_pages: int = 10) -> list[tuple[str, int]]:
+    """
+    Extrait la table des matières en analysant le texte des premières pages.
+
+    Recherche des patterns typiques de TOC comme:
+    - "Titre du chapitre ............... 12"
+    - "1. Introduction                    5"
+    - "Article 1 - Objet .............. 3"
+
+    Args:
+        doc: Document PyMuPDF ouvert
+        max_pages: Nombre maximum de pages à analyser pour trouver le TOC
+
+    Returns:
+        Liste de tuples (titre, page)
+    """
+    entries = []
+    toc_found = False
+
+    # Patterns pour détecter les entrées de TOC
+    # Pattern: texte suivi de points/espaces puis d'un numéro de page
+    toc_patterns = [
+        # "Titre ............... 12" ou "Titre          12"
+        re.compile(r'^(.+?)[\s.]{3,}(\d+)\s*$'),
+        # "1. Titre ............ 12" ou "1.2.3 Titre ..... 12"
+        re.compile(r'^(\d+(?:\.\d+)*\.?\s+.+?)[\s.]{3,}(\d+)\s*$'),
+        # "Article 1 - Titre ... 12"
+        re.compile(r'^((?:Article|Chapitre|Section|Titre)\s+\d+.+?)[\s.]{3,}(\d+)\s*$', re.IGNORECASE),
+    ]
+
+    # Mots-clés indiquant le début d'un sommaire
+    toc_start_keywords = ['sommaire', 'table des matières', 'table of contents', 'index']
+
+    pages_to_check = min(max_pages, len(doc))
+
+    for page_num in range(pages_to_check):
+        page = doc[page_num]
+        text = page.get_text()
+        lines = text.split('\n')
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Vérifier si on trouve un indicateur de début de TOC
+            line_lower = line.lower()
+            if any(kw in line_lower for kw in toc_start_keywords):
+                toc_found = True
+                continue
+
+            # Si on a trouvé le début du TOC, chercher les entrées
+            if toc_found or page_num < 5:  # Toujours chercher dans les 5 premières pages
+                for pattern in toc_patterns:
+                    match = pattern.match(line)
+                    if match:
+                        title = match.group(1).strip()
+                        page_ref = int(match.group(2))
+
+                        # Filtrer les titres trop courts ou les faux positifs
+                        if len(title) >= 3 and page_ref > 0 and page_ref <= len(doc):
+                            # Nettoyer le titre (enlever les points de suite)
+                            title = re.sub(r'\.+$', '', title).strip()
+                            entries.append((title, page_ref - 1))  # 0-indexed
+                        break
+
+    # Dédupliquer et trier par page
+    seen = set()
+    unique_entries = []
+    for title, page in entries:
+        key = (title.lower(), page)
+        if key not in seen:
+            seen.add(key)
+            unique_entries.append((title, page))
+
+    unique_entries.sort(key=lambda x: x[1])
+
+    logger.info(f"TOC extrait depuis le texte: {len(unique_entries)} entrees")
+    return unique_entries
+
+
+def extract_chapters(pdf_bytes: bytes) -> list[Chapter]:
+    """
+    Extrait les chapitres d'un PDF en utilisant la table des matières.
+
+    Tente d'abord d'extraire le TOC depuis les signets PDF, puis depuis
+    l'analyse textuelle des premières pages.
 
     Args:
         pdf_bytes: Contenu binaire du fichier PDF
-        min_title_font_size: Taille de police minimale pour considérer un texte comme titre de chapitre
 
     Returns:
-        Liste de Chapter avec titre, contenu et coordonnées
+        Liste de Chapter avec titre, contenu et pages
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    total_pages = len(doc)
 
-    # Structure pour stocker les éléments de texte avec leur taille de police
-    text_elements: list[dict] = []
+    # Essayer d'abord les signets
+    toc_entries = extract_toc_from_bookmarks(doc)
 
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        # Extraction détaillée avec informations de police
-        text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+    # Si pas de signets, analyser le texte
+    if not toc_entries:
+        logger.info("Pas de signets trouves, analyse du texte pour trouver le TOC")
+        toc_entries = extract_toc_from_text(doc)
 
-        for block in text_dict.get("blocks", []):
-            if block.get("type") != 0:  # Type 0 = texte
-                continue
+    if not toc_entries:
+        logger.warning("Aucune table des matieres trouvee dans le PDF")
+        doc.close()
+        return []
 
-            for line in block.get("lines", []):
-                line_text = ""
-                line_font_size = 0.0
-                line_bbox = line.get("bbox", (0, 0, 0, 0))
+    # Extraire le contenu de chaque chapitre
+    chapters: list[Chapter] = []
 
-                for span in line.get("spans", []):
-                    span_text = span.get("text", "").strip()
-                    span_size = span.get("size", 0.0)
+    for i, (title, start_page) in enumerate(toc_entries):
+        # Déterminer la page de fin (page avant le prochain chapitre ou fin du doc)
+        if i + 1 < len(toc_entries):
+            end_page = toc_entries[i + 1][1] - 1
+        else:
+            end_page = total_pages - 1
 
-                    if span_text:
-                        line_text += span.get("text", "")
-                        # Prendre la taille de police maximale de la ligne
-                        line_font_size = max(line_font_size, span_size)
+        # S'assurer que les pages sont valides
+        start_page = max(0, min(start_page, total_pages - 1))
+        end_page = max(start_page, min(end_page, total_pages - 1))
 
-                line_text = line_text.strip()
-                if line_text:
-                    text_elements.append({
-                        "text": line_text,
-                        "font_size": line_font_size,
-                        "page_number": page_num,
-                        "x0": line_bbox[0],
-                        "y0": line_bbox[1],
-                        "x1": line_bbox[2],
-                        "y1": line_bbox[3],
-                    })
+        # Extraire le texte des pages du chapitre
+        content_parts = []
+        for page_num in range(start_page, end_page + 1):
+            page = doc[page_num]
+            page_text = page.get_text()
+            if page_text.strip():
+                content_parts.append(page_text)
+
+        content = "\n".join(content_parts).strip()
+
+        # Ne pas ajouter les chapitres vides
+        if content:
+            chapters.append(Chapter(
+                title=title,
+                content=content,
+                start_page=start_page,
+                end_page=end_page,
+            ))
 
     doc.close()
-
-    # Regroupement en chapitres
-    chapters: list[Chapter] = []
-    current_chapter: dict | None = None
-
-    for element in text_elements:
-        is_title = element["font_size"] >= min_title_font_size
-
-        if is_title:
-            # Sauvegarder le chapitre précédent s'il existe
-            if current_chapter is not None and current_chapter["content"].strip():
-                chapters.append(Chapter(
-                    title=current_chapter["title"],
-                    content=current_chapter["content"].strip(),
-                    start_page=current_chapter["start_page"],
-                    end_page=current_chapter["end_page"],
-                    title_x0=current_chapter["title_x0"],
-                    title_y0=current_chapter["title_y0"],
-                    title_x1=current_chapter["title_x1"],
-                    title_y1=current_chapter["title_y1"],
-                    title_font_size=current_chapter["title_font_size"],
-                ))
-
-            # Démarrer un nouveau chapitre
-            current_chapter = {
-                "title": element["text"],
-                "content": "",
-                "start_page": element["page_number"],
-                "end_page": element["page_number"],
-                "title_x0": element["x0"],
-                "title_y0": element["y0"],
-                "title_x1": element["x1"],
-                "title_y1": element["y1"],
-                "title_font_size": element["font_size"],
-            }
-        elif current_chapter is not None:
-            # Ajouter le texte au chapitre courant
-            current_chapter["content"] += element["text"] + "\n"
-            current_chapter["end_page"] = element["page_number"]
-
-    # Sauvegarder le dernier chapitre
-    if current_chapter is not None and current_chapter["content"].strip():
-        chapters.append(Chapter(
-            title=current_chapter["title"],
-            content=current_chapter["content"].strip(),
-            start_page=current_chapter["start_page"],
-            end_page=current_chapter["end_page"],
-            title_x0=current_chapter["title_x0"],
-            title_y0=current_chapter["title_y0"],
-            title_x1=current_chapter["title_x1"],
-            title_y1=current_chapter["title_y1"],
-            title_font_size=current_chapter["title_font_size"],
-        ))
-
+    logger.info(f"Extraction terminee: {len(chapters)} chapitres extraits")
     return chapters
 
 
@@ -139,8 +206,10 @@ def add_annotations_to_pdf(
         chapter = analysis.chapter
         page = doc[chapter.start_page]
 
-        # Position de l'annotation (coin supérieur droit du titre)
-        point = fitz.Point(chapter.title_x1, chapter.title_y0)
+        # Position de l'annotation (coin supérieur droit de la page)
+        # On place l'annotation en haut à droite pour qu'elle soit visible
+        page_rect = page.rect
+        point = fitz.Point(page_rect.width - 30, 30)
 
         # Création de l'annotation Sticky Note
         annot = page.add_text_annot(
@@ -184,81 +253,28 @@ def get_pdf_info(pdf_bytes: bytes) -> dict:
     return info
 
 
-def analyze_font_sizes(pdf_bytes: bytes) -> dict:
+def get_toc_preview(pdf_bytes: bytes) -> list[dict]:
     """
-    Analyse les tailles de police utilisées dans le PDF.
-
-    Utile pour aider l'utilisateur à déterminer la taille de police
-    minimale des titres de chapitres.
+    Retourne un aperçu de la table des matières détectée.
 
     Args:
         pdf_bytes: Contenu binaire du PDF
 
     Returns:
-        Dictionnaire avec:
-        - font_sizes: dict des tailles de police avec leur fréquence et exemples de texte
-        - min_size: taille minimale trouvée
-        - max_size: taille maximale trouvée
-        - suggested_title_size: suggestion de taille pour les titres (percentile 90)
+        Liste de dictionnaires avec titre et page de chaque entrée du TOC
     """
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-    # Collecter toutes les tailles de police avec des exemples
-    font_data: dict[float, dict] = {}
+    # Essayer d'abord les signets
+    toc_entries = extract_toc_from_bookmarks(doc)
 
-    for page_num in range(len(doc)):
-        page = doc[page_num]
-        text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
-
-        for block in text_dict.get("blocks", []):
-            if block.get("type") != 0:
-                continue
-
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    size = round(span.get("size", 0.0), 1)
-                    text = span.get("text", "").strip()
-
-                    if size > 0 and text:
-                        if size not in font_data:
-                            font_data[size] = {
-                                "count": 0,
-                                "examples": [],
-                            }
-                        font_data[size]["count"] += 1
-                        # Garder quelques exemples (max 3)
-                        if len(font_data[size]["examples"]) < 3:
-                            # Tronquer les exemples longs
-                            example = text[:50] + "..." if len(text) > 50 else text
-                            if example not in font_data[size]["examples"]:
-                                font_data[size]["examples"].append(example)
+    # Si pas de signets, analyser le texte
+    if not toc_entries:
+        toc_entries = extract_toc_from_text(doc)
 
     doc.close()
 
-    if not font_data:
-        return {
-            "font_sizes": {},
-            "min_size": 0,
-            "max_size": 0,
-            "suggested_title_size": 14.0,
-        }
-
-    sizes = sorted(font_data.keys())
-
-    # Calculer le percentile 90 pour suggérer la taille des titres
-    total_count = sum(data["count"] for data in font_data.values())
-    cumulative = 0
-    suggested_size = sizes[-1]
-
-    for size in sizes:
-        cumulative += font_data[size]["count"]
-        if cumulative / total_count >= 0.90:
-            suggested_size = size
-            break
-
-    return {
-        "font_sizes": {size: font_data[size] for size in sizes},
-        "min_size": sizes[0],
-        "max_size": sizes[-1],
-        "suggested_title_size": suggested_size,
-    }
+    return [
+        {"title": title, "page": page + 1}  # 1-indexed pour l'affichage
+        for title, page in toc_entries
+    ]

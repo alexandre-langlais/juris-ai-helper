@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   FileText,
   Download,
@@ -9,6 +9,7 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  BookOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -20,7 +21,6 @@ import {
 } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { FileUpload } from '@/components/file-upload';
-import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
@@ -48,6 +48,11 @@ interface ProcessingResult {
   matchedChapters: number;
 }
 
+interface ChapterPreview {
+  title: string;
+  page: number;
+}
+
 export default function Home() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -56,15 +61,16 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState('');
   const [result, setResult] = useState<ProcessingResult | null>(null);
 
-  // Nouveaux états pour les options
+  // États pour les options
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [suggestedFontSize, setSuggestedFontSize] = useState<number | null>(null);
-  const [fontSizeInput, setFontSizeInput] = useState<string>('14.0');
-  const [analyzingFonts, setAnalyzingFonts] = useState(false);
 
   // État pour l'affichage des analyses
   const [expandedAnalyses, setExpandedAnalyses] = useState<Set<number>>(new Set());
+
+  // État pour l'aperçu des chapitres (table des matières)
+  const [chapterPreview, setChapterPreview] = useState<ChapterPreview[]>([]);
+  const [loadingPreview, setLoadingPreview] = useState(false);
 
   // Charger les modèles disponibles au démarrage
   useEffect(() => {
@@ -83,37 +89,35 @@ export default function Home() {
     fetchModels();
   }, []);
 
-  // Analyser les polices quand un PDF est uploadé
-  const handlePdfSelect = async (file: File | null) => {
+  // Charger l'aperçu des chapitres quand un PDF est uploadé
+  const handlePdfSelect = useCallback(async (file: File | null) => {
     setPdfFile(file);
-    setSuggestedFontSize(null);
+    setChapterPreview([]);
 
     if (file) {
-      setAnalyzingFonts(true);
+      setLoadingPreview(true);
       try {
         const formData = new FormData();
         formData.append('pdf', file);
 
-        const response = await fetch('/api/analyze-fonts', {
+        const response = await fetch('/api/preview', {
           method: 'POST',
           body: formData,
         });
 
         if (response.ok) {
           const data = await response.json();
-          const suggested = data.suggested_title_size || 14.0;
-          setSuggestedFontSize(suggested);
-          setFontSizeInput(suggested.toString());
+          setChapterPreview(data.chapters || []);
         }
       } catch (error) {
-        console.error('Erreur lors de l\'analyse des polices:', error);
+        console.error('Erreur lors du chargement de l\'aperçu:', error);
       } finally {
-        setAnalyzingFonts(false);
+        setLoadingPreview(false);
       }
     }
-  };
+  }, []);
 
-  const canSubmit = pdfFile && csvFile && status === 'idle' && !analyzingFonts;
+  const canSubmit = pdfFile && csvFile && status === 'idle' && !loadingPreview && chapterPreview.length > 0;
 
   const handleSubmit = async () => {
     if (!pdfFile || !csvFile) return;
@@ -127,7 +131,6 @@ export default function Home() {
     const formData = new FormData();
     formData.append('pdf', pdfFile);
     formData.append('csv', csvFile);
-    formData.append('min_title_font_size', fontSizeInput);
     if (selectedModel) {
       formData.append('model', selectedModel);
     }
@@ -211,9 +214,8 @@ export default function Home() {
     setProgress(0);
     setErrorMessage('');
     setResult(null);
-    setSuggestedFontSize(null);
-    setFontSizeInput('14.0');
     setExpandedAnalyses(new Set());
+    setChapterPreview([]);
   };
 
   const toggleAnalysis = (index: number) => {
@@ -244,7 +246,7 @@ export default function Home() {
         <CardHeader>
           <CardTitle>Annotation de contrat</CardTitle>
           <CardDescription>
-            Importez votre contrat PDF et le fichier CSV contenant les sujets et
+            Importez votre contrat PDF (avec table des matieres) et le fichier CSV contenant les sujets et
             commentaires
           </CardDescription>
         </CardHeader>
@@ -264,18 +266,52 @@ export default function Home() {
                     file={pdfFile}
                     onFileSelect={handlePdfSelect}
                   />
-                  {analyzingFonts && (
-                    <div className="flex items-center gap-2 mt-2 text-sm text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Analyse des polices en cours...
-                    </div>
-                  )}
-                  {suggestedFontSize !== null && !analyzingFonts && (
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Taille de police suggérée pour les titres: {suggestedFontSize}
-                    </p>
-                  )}
                 </div>
+
+                {/* Aperçu des chapitres détectés via table des matières */}
+                {pdfFile && (
+                  <div className="border rounded-lg">
+                    <div className="p-3 bg-muted/50 border-b flex items-center gap-2">
+                      <BookOpen className="h-4 w-4" />
+                      <span className="font-medium text-sm">
+                        Table des matieres detectee
+                      </span>
+                      {loadingPreview && (
+                        <Loader2 className="h-4 w-4 animate-spin ml-auto" />
+                      )}
+                    </div>
+                    <div className="p-3">
+                      {!loadingPreview && chapterPreview.length === 0 && (
+                        <p className="text-sm text-muted-foreground text-center py-2">
+                          Aucune table des matieres detectee dans ce PDF.
+                          Assurez-vous que le document contient un sommaire.
+                        </p>
+                      )}
+                      {!loadingPreview && chapterPreview.length > 0 && (
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                          {chapterPreview.map((chapter, index) => (
+                            <div
+                              key={index}
+                              className="flex items-center justify-between text-sm py-1 px-2 rounded hover:bg-muted/50"
+                            >
+                              <span className="truncate flex-1 mr-2">
+                                {chapter.title}
+                              </span>
+                              <span className="text-muted-foreground text-xs whitespace-nowrap">
+                                p. {chapter.page}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {!loadingPreview && chapterPreview.length > 0 && (
+                        <p className="text-xs text-muted-foreground mt-2 pt-2 border-t">
+                          {chapterPreview.length} chapitre{chapterPreview.length > 1 ? 's' : ''} detecte{chapterPreview.length > 1 ? 's' : ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="text-sm font-medium mb-2 block">
@@ -290,30 +326,15 @@ export default function Home() {
                   />
                 </div>
 
-                {/* Options avancées */}
-                <div className="grid grid-cols-2 gap-4 pt-4 border-t">
-                  <div>
+                {/* Sélecteur de modèle LLM */}
+                {availableModels.length > 0 && (
+                  <div className="pt-4 border-t">
                     <label className="text-sm font-medium mb-2 block">
-                      Taille de police min. des titres
-                    </label>
-                    <Input
-                      type="number"
-                      step="0.5"
-                      min="6"
-                      max="72"
-                      value={fontSizeInput}
-                      onChange={(e) => setFontSizeInput(e.target.value)}
-                      placeholder="14.0"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">
-                      Modèle LLM
+                      Modele LLM
                     </label>
                     <Select value={selectedModel} onValueChange={setSelectedModel}>
                       <SelectTrigger>
-                        <SelectValue placeholder="Sélectionner un modèle" />
+                        <SelectValue placeholder="Selectionner un modele" />
                       </SelectTrigger>
                       <SelectContent>
                         {availableModels.map((model) => (
@@ -324,7 +345,7 @@ export default function Home() {
                       </SelectContent>
                     </Select>
                   </div>
-                </div>
+                )}
               </div>
 
               <Button
@@ -335,6 +356,12 @@ export default function Home() {
               >
                 Analyser et annoter
               </Button>
+
+              {pdfFile && chapterPreview.length === 0 && !loadingPreview && (
+                <p className="text-sm text-destructive text-center">
+                  Impossible de lancer l&apos;analyse: aucune table des matieres detectee.
+                </p>
+              )}
             </>
           )}
 
@@ -412,13 +439,13 @@ export default function Home() {
                           <div className="mt-3 pl-4 space-y-2 text-sm">
                             {analysis.matched && analysis.matched_subject && (
                               <p>
-                                <span className="font-medium">Sujet matché:</span>{' '}
+                                <span className="font-medium">Sujet matche:</span>{' '}
                                 {analysis.matched_subject}
                               </p>
                             )}
                             {analysis.matched && analysis.comment_added && (
                               <p>
-                                <span className="font-medium">Commentaire ajouté:</span>{' '}
+                                <span className="font-medium">Commentaire ajoute:</span>{' '}
                                 {analysis.comment_added}
                               </p>
                             )}
