@@ -43,7 +43,7 @@ tolerations: []
 affinity: {}
 backend:
   image:
-    repository: ghcr.io/alexandre-langlais/juris-ai-helper/backend
+    repository: ghcr.io/alexandre-langlais/juris-ai-helper-backend
     tag: "839d1a94ef96c5d13d6f0dcbb2130298f19e8bf7"
   replicaCount: 1
   autoscaling:
@@ -86,7 +86,7 @@ backend:
 frontend:
   domain: juris.rec.alexandre-langlais.fr
   image:
-    repository: ghcr.io/alexandre-langlais/juris-ai-helper/frontend
+    repository: ghcr.io/alexandre-langlais/juris-ai-helper-frontend
     tag: "839d1a94ef96c5d13d6f0dcbb2130298f19e8bf7"
   replicaCount: 1
   autoscaling:
