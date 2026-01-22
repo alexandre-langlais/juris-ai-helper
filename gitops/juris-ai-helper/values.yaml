@@ -5,14 +5,11 @@
 # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
 image:
   pullPolicy: Always
-
 imagePullSecrets:
   - name: ghcr-secret
-
 # This is to override the chart name.
 nameOverride: ""
 fullnameOverride: ""
-
 # This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
 serviceAccount:
   # Specifies whether a service account should be created
@@ -24,49 +21,41 @@ serviceAccount:
   # The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
-
 # This is for setting Kubernetes Annotations to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}
 # This is for setting Kubernetes Labels to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
-
 podSecurityContext: {}
-  # fsGroup: 2000
+# fsGroup: 2000
 
 securityContext: {}
-  # capabilities:
-  #   drop:
-  #   - ALL
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
+# capabilities:
+#   drop:
+#   - ALL
+# readOnlyRootFilesystem: true
+# runAsNonRoot: true
+# runAsUser: 1000
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
-
 backend:
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper/backend
-    tag: "latest"
-
+    tag: "839d1a94ef96c5d13d6f0dcbb2130298f19e8bf7"
   replicaCount: 1
   autoscaling:
     enabled: false
     minReplicas: 1
     maxReplicas: 100
     targetCPUUtilizationPercentage: 80
-
   service:
     # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
     type: ClusterIP
     # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
     port: 8000
-
   volumes: []
   # - name: foo
   #   secret:
@@ -74,8 +63,8 @@ backend:
   #     optional: false
 
   volumeMounts: []
-    # - name: foo
-    #   mountPath: "/etc/foo"
+  # - name: foo
+  #   mountPath: "/etc/foo"
   #   readOnly: true
 
   # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
@@ -88,33 +77,28 @@ backend:
       path: /
       port: http
   resources: {}
-    # limits:
-    #   cpu: 100m
-    #   memory: 128Mi
-    # requests:
+  # limits:
   #   cpu: 100m
   #   memory: 128Mi
-
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
 frontend:
   domain: juris.rec.alexandre-langlais.fr
   image:
     repository: ghcr.io/alexandre-langlais/juris-ai-helper/frontend
-    tag: "latest"
-
+    tag: "839d1a94ef96c5d13d6f0dcbb2130298f19e8bf7"
   replicaCount: 1
-
   autoscaling:
     enabled: false
     minReplicas: 1
     maxReplicas: 100
     targetCPUUtilizationPercentage: 80
-
   service:
     # This sets the service type more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#publishing-services-service-types
     type: ClusterIP
     # This sets the ports more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/#field-spec-ports
     port: 3000
-
   volumes: []
   # - name: foo
   #   secret:
@@ -122,8 +106,8 @@ frontend:
   #     optional: false
 
   volumeMounts: []
-    # - name: foo
-    #   mountPath: "/etc/foo"
+  # - name: foo
+  #   mountPath: "/etc/foo"
   #   readOnly: true
 
   # This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
@@ -136,10 +120,9 @@ frontend:
       path: /
       port: http
   resources: {}
-    # limits:
-    #   cpu: 100m
-    #   memory: 128Mi
-    # requests:
+  # limits:
   #   cpu: 100m
   #   memory: 128Mi
-
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
