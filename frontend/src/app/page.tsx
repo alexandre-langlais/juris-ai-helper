@@ -53,6 +53,13 @@ interface ChapterPreview {
   page: number;
 }
 
+interface SubjectsPreview {
+  valid: boolean;
+  subjects_count: number;
+  subjects: string[];
+  error?: string;
+}
+
 export default function Home() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -71,6 +78,15 @@ export default function Home() {
   // État pour l'aperçu des chapitres (table des matières)
   const [chapterPreview, setChapterPreview] = useState<ChapterPreview[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
+
+  // État pour la progression en temps réel
+  const [currentChapter, setCurrentChapter] = useState<string>('');
+  const [totalChapters, setTotalChapters] = useState(0);
+  const [processedChapters, setProcessedChapters] = useState(0);
+
+  // État pour l'aperçu des sujets (CSV/Excel)
+  const [subjectsPreview, setSubjectsPreview] = useState<SubjectsPreview | null>(null);
+  const [loadingSubjects, setLoadingSubjects] = useState(false);
 
   // Charger les modèles disponibles au démarrage
   useEffect(() => {
@@ -117,16 +133,61 @@ export default function Home() {
     }
   }, []);
 
-  const canSubmit = pdfFile && csvFile && status === 'idle' && !loadingPreview && chapterPreview.length > 0;
+  // Charger l'aperçu des sujets quand un fichier CSV/Excel est uploadé
+  const handleSubjectsFileSelect = useCallback(async (file: File | null) => {
+    setCsvFile(file);
+    setSubjectsPreview(null);
+
+    if (file) {
+      setLoadingSubjects(true);
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/api/preview-subjects', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setSubjectsPreview(data);
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          setSubjectsPreview({
+            valid: false,
+            subjects_count: 0,
+            subjects: [],
+            error: errorData.detail || 'Erreur lors de la validation du fichier',
+          });
+        }
+      } catch (error) {
+        console.error('Erreur lors de la validation du fichier:', error);
+        setSubjectsPreview({
+          valid: false,
+          subjects_count: 0,
+          subjects: [],
+          error: 'Erreur lors de la validation du fichier',
+        });
+      } finally {
+        setLoadingSubjects(false);
+      }
+    }
+  }, []);
+
+  const canSubmit = pdfFile && csvFile && status === 'idle' && !loadingPreview && !loadingSubjects && chapterPreview.length > 0 && subjectsPreview?.valid;
 
   const handleSubmit = async () => {
     if (!pdfFile || !csvFile) return;
 
     setStatus('uploading');
-    setProgress(10);
+    setProgress(5);
     setErrorMessage('');
     setResult(null);
     setExpandedAnalyses(new Set());
+    setCurrentChapter('');
+    setTotalChapters(0);
+    setProcessedChapters(0);
 
     const formData = new FormData();
     formData.append('pdf', pdfFile);
@@ -135,48 +196,108 @@ export default function Home() {
       formData.append('model', selectedModel);
     }
 
-    // Timeout de 5 minutes
+    // Timeout de 10 minutes pour le streaming
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
+    const timeoutId = setTimeout(() => controller.abort(), 10 * 60 * 1000);
 
     try {
-      setProgress(30);
       setStatus('processing');
 
-      const response = await fetch('/api/process', {
+      // Utiliser le endpoint SSE pour la progression en temps réel
+      const response = await fetch('/api/process-stream', {
         method: 'POST',
         body: formData,
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
-      setProgress(80);
-
       if (!response.ok) {
+        clearTimeout(timeoutId);
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || `Erreur ${response.status}`);
       }
 
-      const data = await response.json();
+      // Lire le stream SSE
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Impossible de lire le stream');
+      }
 
-      const originalName = pdfFile.name.replace(/\.pdf$/i, '');
-      const filename = data.pdf_filename || `${originalName}_annote.pdf`;
+      const decoder = new TextDecoder();
+      let buffer = '';
 
-      setResult({
-        pdfBase64: data.pdf_base64,
-        filename,
-        analyses: data.analyses || [],
-        totalChapters: data.total_chapters || 0,
-        matchedChapters: data.matched_chapters || 0,
-      });
-      setProgress(100);
-      setStatus('success');
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              switch (data.type) {
+                case 'start':
+                  setTotalChapters(data.total_chapters);
+                  setProgress(10);
+                  break;
+
+                case 'progress':
+                  setCurrentChapter(data.chapter_title);
+                  // Progress de 10 à 85 pendant l'analyse
+                  const progressPercent = 10 + (data.progress_percent * 0.75);
+                  setProgress(progressPercent);
+                  break;
+
+                case 'chapter_done':
+                  setProcessedChapters((prev) => prev + 1);
+                  break;
+
+                case 'annotating':
+                  setCurrentChapter('');
+                  setProgress(90);
+                  break;
+
+                case 'complete': {
+                  clearTimeout(timeoutId);
+                  const originalName = pdfFile.name.replace(/\.pdf$/i, '');
+                  const filename = data.pdf_filename || `${originalName}_annote.pdf`;
+
+                  setResult({
+                    pdfBase64: data.pdf_base64,
+                    filename,
+                    analyses: data.analyses || [],
+                    totalChapters: data.total_chapters || 0,
+                    matchedChapters: data.matched_chapters || 0,
+                  });
+                  setProgress(100);
+                  setStatus('success');
+                  break;
+                }
+
+                case 'error':
+                  clearTimeout(timeoutId);
+                  throw new Error(data.message);
+              }
+            } catch (parseError) {
+              // Ignorer les erreurs de parsing pour les lignes incomplètes
+              if (parseError instanceof SyntaxError) continue;
+              throw parseError;
+            }
+          }
+        }
+      }
+
+      clearTimeout(timeoutId);
     } catch (error) {
       clearTimeout(timeoutId);
       setStatus('error');
+      setCurrentChapter('');
 
       if (error instanceof Error && error.name === 'AbortError') {
-        setErrorMessage('Le traitement a depasse le delai maximum de 5 minutes');
+        setErrorMessage('Le traitement a depasse le delai maximum de 10 minutes');
       } else {
         setErrorMessage(
           error instanceof Error ? error.message : 'Une erreur est survenue'
@@ -216,6 +337,10 @@ export default function Home() {
     setResult(null);
     setExpandedAnalyses(new Set());
     setChapterPreview([]);
+    setCurrentChapter('');
+    setTotalChapters(0);
+    setProcessedChapters(0);
+    setSubjectsPreview(null);
   };
 
   const toggleAnalysis = (index: number) => {
@@ -246,8 +371,7 @@ export default function Home() {
         <CardHeader>
           <CardTitle>Annotation de contrat</CardTitle>
           <CardDescription>
-            Importez votre contrat PDF (avec table des matieres) et le fichier CSV contenant les sujets et
-            commentaires
+            Importez votre contrat PDF (avec table des matieres) et le fichier de sujets (CSV ou Excel)
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -315,16 +439,68 @@ export default function Home() {
 
                 <div>
                   <label className="text-sm font-medium mb-2 block">
-                    Fichier CSV (sujets et commentaires)
+                    Fichier de sujets (CSV ou Excel)
                   </label>
                   <FileUpload
-                    accept=".csv"
-                    label="Glissez votre CSV ici"
-                    description="Colonnes requises: sujet, commentaire"
+                    accept=".csv,.xlsx,.xls"
+                    label="Glissez votre fichier ici"
+                    description="CSV ou Excel - Colonnes requises: sujet, commentaire"
                     file={csvFile}
-                    onFileSelect={setCsvFile}
+                    onFileSelect={handleSubjectsFileSelect}
                   />
                 </div>
+
+                {/* Aperçu des sujets détectés */}
+                {csvFile && (
+                  <div className={`border rounded-lg ${subjectsPreview && !subjectsPreview.valid ? 'border-destructive' : ''}`}>
+                    <div className="p-3 bg-muted/50 border-b flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      <span className="font-medium text-sm">
+                        Validation du fichier
+                      </span>
+                      {loadingSubjects && (
+                        <Loader2 className="h-4 w-4 animate-spin ml-auto" />
+                      )}
+                      {!loadingSubjects && subjectsPreview?.valid && (
+                        <CheckCircle2 className="h-4 w-4 text-green-600 ml-auto" />
+                      )}
+                      {!loadingSubjects && subjectsPreview && !subjectsPreview.valid && (
+                        <AlertCircle className="h-4 w-4 text-destructive ml-auto" />
+                      )}
+                    </div>
+                    <div className="p-3">
+                      {!loadingSubjects && subjectsPreview && !subjectsPreview.valid && (
+                        <p className="text-sm text-destructive">
+                          {subjectsPreview.error || 'Fichier invalide'}
+                        </p>
+                      )}
+                      {!loadingSubjects && subjectsPreview?.valid && (
+                        <>
+                          <p className="text-sm text-green-600 font-medium mb-2">
+                            {subjectsPreview.subjects_count} sujet{subjectsPreview.subjects_count > 1 ? 's' : ''} detecte{subjectsPreview.subjects_count > 1 ? 's' : ''}
+                          </p>
+                          {subjectsPreview.subjects.length > 0 && (
+                            <div className="space-y-1 max-h-32 overflow-y-auto">
+                              {subjectsPreview.subjects.map((subject, index) => (
+                                <div
+                                  key={index}
+                                  className="text-sm py-1 px-2 rounded bg-muted/30 truncate"
+                                >
+                                  {subject}
+                                </div>
+                              ))}
+                              {subjectsPreview.subjects_count > 10 && (
+                                <p className="text-xs text-muted-foreground pt-1">
+                                  ... et {subjectsPreview.subjects_count - 10} autre{subjectsPreview.subjects_count - 10 > 1 ? 's' : ''}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Sélecteur de modèle LLM */}
                 {availableModels.length > 0 && (
@@ -362,6 +538,11 @@ export default function Home() {
                   Impossible de lancer l&apos;analyse: aucune table des matieres detectee.
                 </p>
               )}
+              {csvFile && subjectsPreview && !subjectsPreview.valid && !loadingSubjects && (
+                <p className="text-sm text-destructive text-center">
+                  Impossible de lancer l&apos;analyse: fichier de sujets invalide.
+                </p>
+              )}
             </>
           )}
 
@@ -376,7 +557,29 @@ export default function Home() {
                     : 'Analyse en cours...'}
                 </span>
               </div>
+
+              {/* Progression détaillée */}
+              {status === 'processing' && totalChapters > 0 && (
+                <div className="text-center">
+                  <p className="text-sm font-medium">
+                    Chapitre {processedChapters + 1} / {totalChapters}
+                  </p>
+                  {currentChapter && (
+                    <p className="text-sm text-muted-foreground mt-1 truncate px-4">
+                      {currentChapter}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <Progress value={progress} className="h-2" />
+
+              {status === 'processing' && processedChapters > 0 && (
+                <p className="text-center text-xs text-muted-foreground">
+                  {processedChapters} chapitre{processedChapters > 1 ? 's' : ''} analyse{processedChapters > 1 ? 's' : ''}
+                </p>
+              )}
+
               <p className="text-center text-sm text-muted-foreground">
                 L&apos;analyse peut prendre plusieurs minutes selon la taille du
                 document

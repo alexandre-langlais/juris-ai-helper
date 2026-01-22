@@ -117,6 +117,44 @@ def extract_toc_from_text(doc: fitz.Document, max_pages: int = 10) -> list[tuple
     return unique_entries
 
 
+def find_title_position(page: fitz.Page, title: str) -> float | None:
+    """
+    Recherche la position Y d'un titre sur une page.
+
+    Args:
+        page: Page PyMuPDF
+        title: Titre à rechercher
+
+    Returns:
+        Coordonnée Y du titre ou None si non trouvé
+    """
+    # Nettoyer le titre pour la recherche
+    search_title = title.strip()
+
+    # Rechercher le titre exact d'abord
+    text_instances = page.search_for(search_title)
+    if text_instances:
+        # Prendre la première occurrence
+        return text_instances[0].y0
+
+    # Essayer avec les premiers mots du titre (au moins 3 mots ou 20 caractères)
+    words = search_title.split()
+    if len(words) > 3:
+        partial_title = " ".join(words[:4])
+        text_instances = page.search_for(partial_title)
+        if text_instances:
+            return text_instances[0].y0
+
+    # Essayer avec le début du titre (premiers 30 caractères)
+    if len(search_title) > 30:
+        partial_title = search_title[:30]
+        text_instances = page.search_for(partial_title)
+        if text_instances:
+            return text_instances[0].y0
+
+    return None
+
+
 def extract_chapters(pdf_bytes: bytes) -> list[Chapter]:
     """
     Extrait les chapitres d'un PDF en utilisant la table des matières.
@@ -160,6 +198,10 @@ def extract_chapters(pdf_bytes: bytes) -> list[Chapter]:
         start_page = max(0, min(start_page, total_pages - 1))
         end_page = max(start_page, min(end_page, total_pages - 1))
 
+        # Trouver la position Y du titre sur la page de début
+        page = doc[start_page]
+        title_y = find_title_position(page, title)
+
         # Extraire le texte des pages du chapitre
         content_parts = []
         for page_num in range(start_page, end_page + 1):
@@ -177,6 +219,7 @@ def extract_chapters(pdf_bytes: bytes) -> list[Chapter]:
                 content=content,
                 start_page=start_page,
                 end_page=end_page,
+                title_y=title_y,
             ))
 
     doc.close()
@@ -189,6 +232,8 @@ def add_annotations_to_pdf(
 ) -> bytes:
     """
     Ajoute des annotations Sticky Notes au PDF pour les chapitres avec correspondance.
+
+    Les annotations sont placées au niveau du titre de chaque chapitre.
 
     Args:
         pdf_bytes: Contenu binaire du PDF original
@@ -205,11 +250,20 @@ def add_annotations_to_pdf(
 
         chapter = analysis.chapter
         page = doc[chapter.start_page]
-
-        # Position de l'annotation (coin supérieur droit de la page)
-        # On place l'annotation en haut à droite pour qu'elle soit visible
         page_rect = page.rect
-        point = fitz.Point(page_rect.width - 30, 30)
+
+        # Position Y de l'annotation: au niveau du titre si trouvé, sinon en haut
+        if chapter.title_y is not None:
+            y_pos = chapter.title_y
+        else:
+            # Fallback: essayer de retrouver le titre sur la page
+            title_y = find_title_position(page, chapter.title)
+            y_pos = title_y if title_y is not None else 30
+
+        # Position X: à droite de la page (avec une petite marge)
+        x_pos = page_rect.width - 25
+
+        point = fitz.Point(x_pos, y_pos)
 
         # Création de l'annotation Sticky Note
         annot = page.add_text_annot(

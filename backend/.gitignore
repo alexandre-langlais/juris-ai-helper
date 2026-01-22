@@ -139,3 +139,5 @@ htmlcov/
 *.env
 *.csv
 *.pdf
+*.xls
+*.xlsx

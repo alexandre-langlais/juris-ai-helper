@@ -5,3 +5,5 @@ pymupdf>=1.23.0
 httpx>=0.26.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
+openpyxl>=3.1.0
+xlrd>=2.0.1

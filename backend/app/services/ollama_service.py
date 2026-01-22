@@ -208,3 +208,69 @@ async def analyze_all_chapters(
     matched_count = sum(1 for a in analyses if a.matched)
     logger.info(f"Analyse terminee: {matched_count} correspondances sur {total_chapters} chapitres")
     return analyses
+
+
+from typing import AsyncGenerator
+
+
+async def analyze_all_chapters_streaming(
+    chapters: list[Chapter], csv_entries: list[CSVEntry], model: str | None = None
+) -> AsyncGenerator[dict, None]:
+    """
+    Analyse tous les chapitres avec streaming de progression.
+
+    Yields des événements de progression et le résultat final.
+
+    Args:
+        chapters: Liste des chapitres extraits du PDF
+        csv_entries: Liste des entrées CSV
+        model: Modèle LLM à utiliser (utilise le modèle par défaut si None)
+
+    Yields:
+        Dictionnaires avec:
+        - type="progress": current_chapter, total_chapters, chapter_title, progress_percent
+        - type="chapter_done": chapter_index, chapter_title, matched, matched_subject (si applicable)
+        - type="complete": analyses (liste complète)
+    """
+    analyses: list[ChapterAnalysis] = []
+    total_chapters = len(chapters)
+
+    logger.info(f"Analyse streaming de {total_chapters} chapitres")
+
+    for i, chapter in enumerate(chapters):
+        # Envoyer l'événement de début d'analyse du chapitre
+        progress_percent = int((i / total_chapters) * 100)
+        yield {
+            "type": "progress",
+            "current_chapter": i + 1,
+            "total_chapters": total_chapters,
+            "chapter_title": chapter.title,
+            "progress_percent": progress_percent,
+        }
+
+        # Analyser le chapitre
+        analysis = await analyze_chapter(chapter, csv_entries, model)
+        analyses.append(analysis)
+
+        # Envoyer l'événement de fin d'analyse du chapitre
+        chapter_done_event = {
+            "type": "chapter_done",
+            "chapter_index": i,
+            "chapter_title": chapter.title,
+            "matched": analysis.matched,
+        }
+        if analysis.matched and analysis.csv_entry:
+            chapter_done_event["matched_subject"] = analysis.csv_entry.sujet
+
+        yield chapter_done_event
+
+    # Envoyer l'événement de complétion avec toutes les analyses
+    matched_count = sum(1 for a in analyses if a.matched)
+    logger.info(f"Analyse streaming terminee: {matched_count} correspondances sur {total_chapters} chapitres")
+
+    yield {
+        "type": "complete",
+        "total_chapters": total_chapters,
+        "matched_chapters": matched_count,
+        "analyses": analyses,
+    }

@@ -15,6 +15,8 @@ class Chapter(BaseModel):
     content: str = Field(..., description="Contenu textuel complet du chapitre")
     start_page: int = Field(..., description="Page de début du chapitre (0-indexed)")
     end_page: int = Field(..., description="Page de fin du chapitre (0-indexed)")
+    # Coordonnées du titre sur la page (pour le placement des annotations)
+    title_y: float | None = Field(default=None, description="Coordonnée Y du titre sur la page")
 
 
 class ChapterAnalysis(BaseModel):

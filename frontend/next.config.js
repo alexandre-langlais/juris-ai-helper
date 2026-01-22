@@ -17,6 +17,10 @@ const nextConfig = {
         destination: `${backendUrl}/api/preview`,
       },
       {
+        source: '/api/preview-subjects',
+        destination: `${backendUrl}/api/preview-subjects`,
+      },
+      {
         source: '/api/models',
         destination: `${backendUrl}/api/models`,
       },
