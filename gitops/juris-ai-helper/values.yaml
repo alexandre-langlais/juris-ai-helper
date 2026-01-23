@@ -90,7 +90,7 @@ backend:
   maxPdfSizeMb: 50
   maxCsvSizeMb: 5
   # Modèles
-  ollamaModel: llama3.2:3b
+  ollamaModel: qwen2.5:3b
   ollamaAvailableModels: llama3.2:3b,qwen2.5:3b
 frontend:
   domain: juris.rec.alexandre-langlais.fr
